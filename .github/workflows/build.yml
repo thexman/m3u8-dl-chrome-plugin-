@@ -1,0 +1,203 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create GitHub Releases
+
+jobs:
+  # ── Version ───────────────────────────────────────────────────────────────
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      label: ${{ steps.v.outputs.label }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Tag v1.2.3 → manifest version 1.2.3, archives labelled 1.2.3.
+      # Other builds keep manifest.json's version and are labelled <version>-dev.<sha>.
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            label="$version"
+          else
+            version="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
+            label="${version}-dev.${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+          echo "Version: $version  Label: $label"
+
+  # ── Chrome extension (.crx) ───────────────────────────────────────────────
+  # Optional: needs the EXTENSION_PEM secret. Without it the per-OS packages
+  # are still built, just without a .crx and without a pinned extension ID.
+  crx:
+    name: Build crx
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    outputs:
+      built: ${{ steps.key.outputs.present }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Write signing key
+        id: key
+        env:
+          EXTENSION_PEM: ${{ secrets.EXTENSION_PEM }}
+        run: |
+          if [ -z "$EXTENSION_PEM" ]; then
+            echo "::warning::EXTENSION_PEM secret is not set — skipping .crx. Generate it locally with 'python build.py' and add extension.pem as the EXTENSION_PEM secret."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s' "$EXTENSION_PEM" > extension.pem
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Chrome
+        if: steps.key.outputs.present == 'true'
+        uses: browser-actions/setup-chrome@v2
+        id: chrome
+
+      - name: Build .crx
+        if: steps.key.outputs.present == 'true'
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: python build.py
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f extension.pem
+
+      - uses: actions/upload-artifact@v7
+        if: steps.key.outputs.present == 'true'
+        with:
+          name: crx
+          path: dist/m3u8-dl-chrome-plugin.crx
+
+  # ── Per-OS distributions ──────────────────────────────────────────────────
+  # Each runner builds the native host for its own OS (PyInstaller cannot
+  # cross-compile), smoke-tests it, and packages it with the extension and
+  # the matching installer. Packaging happens here, not in the release job,
+  # so tar.gz archives keep the executable bits.
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: [version, crx]
+    if: ${{ !cancelled() && needs.version.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-amd64
+          - os: macos-latest
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-amd64
+          # Built on 22.04 so the binary runs on distributions with glibc >= 2.35.
+          - os: ubuntu-22.04
+            platform: linux-amd64
+          - os: ubuntu-22.04-arm
+            platform: linux-arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install pyinstaller certifi cryptography
+
+      - name: Build native host
+        run: pyinstaller --onefile --name native_host --collect-data certifi native_host.py
+
+      - name: Smoke test native host
+        shell: bash
+        run: |
+          host=dist/native_host
+          [ "$RUNNER_OS" = "Windows" ] && host=dist/native_host.exe
+          python .github/scripts/smoke_test.py "$host"
+
+      - name: Download crx
+        if: needs.crx.outputs.built == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: crx
+          path: crx
+
+      - name: Package
+        shell: bash
+        env:
+          EXTENSION_PEM: ${{ secrets.EXTENSION_PEM }}
+        run: |
+          host=dist/native_host
+          [ "$RUNNER_OS" = "Windows" ] && host=dist/native_host.exe
+          args=(--platform "${{ matrix.platform }}" --native-host "$host"
+                --version "${{ needs.version.outputs.version }}"
+                --label "${{ needs.version.outputs.label }}" --out release)
+          # The private key is only used to derive the public key / extension ID
+          # and lives outside the workspace; it is never packaged.
+          if [ -n "$EXTENSION_PEM" ]; then
+            key="$RUNNER_TEMP/extension.pem"
+            printf '%s' "$EXTENSION_PEM" > "$key"
+            args+=(--key "$key")
+          fi
+          [ -f crx/m3u8-dl-chrome-plugin.crx ] && args+=(--crx crx/m3u8-dl-chrome-plugin.crx)
+          python package.py "${args[@]}"
+          rm -f "$RUNNER_TEMP/extension.pem"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  # ── GitHub Release ────────────────────────────────────────────────────────
+  release:
+    name: Publish release
+    needs: [package, crx]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.package.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Download crx
+        if: needs.crx.outputs.built == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: crx
+          path: release
+
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

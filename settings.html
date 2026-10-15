@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>M3U8 Downloader Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #1e1e1e;
+      color: #eee;
+      margin: 0;
+      padding: 24px 16px;
+    }
+    main { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .subtitle { color: #888; font-size: 13px; margin: 0 0 24px; }
+    .field { margin-bottom: 18px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .hint { font-size: 12px; color: #888; margin-top: 5px; line-height: 1.5; }
+    .hint code, .info code {
+      background: #2a2a2a;
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: #e0c97a;
+    }
+    input[type="text"], input[type="number"], select, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 4px;
+      color: #eee;
+      font-size: 13px;
+      padding: 7px 9px;
+      font-family: inherit;
+    }
+    textarea {
+      font-family: ui-monospace, Consolas, Menlo, monospace;
+      font-size: 12px;
+      min-height: 64px;
+      resize: vertical;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #3a7bd5; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .row .field { flex: 1; min-width: 160px; }
+    .checkbox { display: flex; align-items: center; gap: 8px; font-weight: normal; }
+    .checkbox input { margin: 0; }
+
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 24px; }
+    button {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #444; }
+    button.primary { background: #1a3a5c; border-color: #3a7bd5; color: #6cb6ff; }
+    button.primary:hover { background: #1f4a7a; }
+    button.small { padding: 3px 8px; font-size: 11px; margin-top: 6px; }
+    .status-msg { font-size: 13px; }
+    .ok { color: #1ab788; }
+    .err { color: #e06c75; }
+
+    .info {
+      margin-top: 20px;
+      padding: 12px 14px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: #bbb;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .info:empty { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>M3U8 Downloader settings</h1>
+    <p class="subtitle">Downloads run in the native host on this computer (Windows, macOS or Linux).</p>
+
+    <div class="field">
+      <label for="tempDir">Temporary directory</label>
+      <input type="text" id="tempDir" spellcheck="false" />
+      <div class="hint">Each download gets its own sub-directory here for the segments. Leave empty for the default shown.</div>
+    </div>
+
+    <div class="field">
+      <label for="downloadDir">Download directory</label>
+      <input type="text" id="downloadDir" spellcheck="false" />
+      <div class="hint">Finished files are moved here. Leave empty for the default shown.</div>
+    </div>
+
+    <div class="field">
+      <label for="ffmpegCommand">ffmpeg command line</label>
+      <textarea id="ffmpegCommand" spellcheck="false"></textarea>
+      <div class="hint">
+        Placeholders: <code>{input}</code> is the local .m3u8 playlist that points at the downloaded segments,
+        <code>{output}</code> is the file to create. Use a full path to ffmpeg if it is not on the PATH, e.g.
+        <code>C:\ffmpeg\bin\ffmpeg.exe</code> or <code>/opt/homebrew/bin/ffmpeg</code>.
+        Quote arguments with spaces using <code>"…"</code>.
+      </div>
+      <button id="resetCommand" class="small">Reset to default</button>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="outputExtension">Output file extension</label>
+        <input type="text" id="outputExtension" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label for="quality">Stream quality</label>
+        <select id="quality">
+          <option value="highest">Highest bandwidth</option>
+          <option value="lowest">Lowest bandwidth</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="concurrency">Parallel segment downloads</label>
+        <input type="number" id="concurrency" min="1" max="16" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="checkbox"><input type="checkbox" id="keepTemp" /> Keep temporary files after a successful download</label>
+    </div>
+
+    <div class="actions">
+      <button id="save" class="primary">Save</button>
+      <button id="test">Test native host &amp; ffmpeg</button>
+      <span id="saveStatus" class="status-msg"></span>
+    </div>
+
+    <div id="info" class="info"></div>
+  </main>
+
+  <script src="common.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

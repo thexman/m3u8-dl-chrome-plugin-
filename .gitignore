@@ -147,3 +147,15 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Extension build / native host
+/.claude/settings.local.json
+/com.m3u8.downloader.json
+/native_host_py.log*
+/dist
+/build
+/*.spec
+/extension.pem
+__pycache__/
+/native_host_launcher.sh
+/release

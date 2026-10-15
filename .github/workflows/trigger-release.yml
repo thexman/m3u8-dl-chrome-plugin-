@@ -1,0 +1,81 @@
+name: Trigger Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to create (e.g. v1.2.3). Leave empty to auto-increment patch from the latest tag."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  trigger-release:
+    name: trigger-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so all tags are visible
+          fetch-tags: true
+
+      - name: Resolve tag name
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag_name }}
+        run: |
+          semver_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+          # Latest semver tag (vX.Y.Z), sorted correctly
+          latest=$(git tag --list 'v*' --sort=-version:refname \
+                   | grep -E "$semver_pattern" \
+                   | head -1)
+
+          if [ -n "$latest" ]; then
+            echo "Latest tag : $latest"
+          else
+            echo "Latest tag : (none)"
+          fi
+
+          if [ -n "$INPUT_TAG" ]; then
+            if [[ ! "$INPUT_TAG" =~ $semver_pattern ]]; then
+              echo "Invalid tag format: $INPUT_TAG (expected vX.Y.Z, e.g. v1.2.3)" >&2
+              exit 1
+            fi
+            new_tag="$INPUT_TAG"
+            echo "Using      : provided input → $new_tag"
+          elif [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            new_tag="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+            echo "Using      : auto patch-increment → $new_tag"
+          else
+            new_tag="v1.0.0"
+            echo "Using      : no prior tag found → $new_tag"
+          fi
+
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "Tag already exists: $new_tag" >&2
+            exit 1
+          fi
+
+          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.resolve.outputs.new_tag }}"
+          git push origin "${{ steps.resolve.outputs.new_tag }}"
+          echo "Pushed tag: ${{ steps.resolve.outputs.new_tag }}"
+
+      - name: Trigger build workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pushes made with GITHUB_TOKEN do not trigger other workflows, so start
+          # Build explicitly on the new tag ref.
+          gh workflow run build.yml --ref "${{ steps.resolve.outputs.new_tag }}"
+          echo "Started build.yml for tag: ${{ steps.resolve.outputs.new_tag }}"
